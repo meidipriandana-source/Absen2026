@@ -203,6 +203,58 @@ export default function App() {
     }
   }, [accessToken]);
 
+  const syncFirestoreToSheets = async (
+    sheetRecords: AttendanceRecord[],
+    firestoreRecords: AttendanceRecord[],
+    token: string,
+    sId: string
+  ) => {
+    if (!token || !sId || !Array.isArray(firestoreRecords) || !Array.isArray(sheetRecords)) return;
+
+    // Find records in firestoreRecords that DO NOT exist in sheetRecords
+    const missingInSheets = firestoreRecords.filter((fRecord) => {
+      if (!fRecord || !fRecord.tanggalKegiatan || !fRecord.namaLengkap) return false;
+      return !sheetRecords.some((sRecord) => {
+        if (!sRecord) return false;
+        return (
+          sRecord.timestamp === fRecord.timestamp ||
+          (sRecord.namaLengkap === fRecord.namaLengkap && sRecord.tanggalKegiatan === fRecord.tanggalKegiatan)
+        );
+      });
+    });
+
+    if (missingInSheets.length === 0) {
+      console.log("No pending Firestore records to sync to Google Sheets.");
+      return;
+    }
+
+    console.log(`Syncing ${missingInSheets.length} Firestore records to Google Sheets...`);
+    addToast("Sinkronisasi Peserta Luar", `Menyalin ${missingInSheets.length} absensi baru dari peserta luar ke Google Sheets...`);
+
+    let successCount = 0;
+    for (const record of missingInSheets) {
+      try {
+        await appendAttendanceRecord(token, sId, record);
+        successCount++;
+        // Throttling slightly to avoid hitting Google Sheets write limits
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      } catch (err) {
+        console.error(`Failed to sync record for ${record.namaLengkap} to Google Sheets:`, err);
+      }
+    }
+
+    if (successCount > 0) {
+      addToast("Sinkronisasi Selesai", `Berhasil memasukkan ${successCount} absensi baru ke Google Sheets.`);
+      try {
+        const updatedSheetData = await getAttendanceRecords(token, sId);
+        const merged = getMergedRecords(updatedSheetData, firestoreRecords);
+        setRecords(merged);
+      } catch (err) {
+        console.error("Failed to reload sheets after sync:", err);
+      }
+    }
+  };
+
   const bootstrapDatabase = async () => {
     if (!accessToken) return;
     setIsInitializingDb(true);
@@ -227,6 +279,11 @@ export default function App() {
 
       const merged = getMergedRecords(sheetData, firestoreData);
       setRecords(merged);
+
+      // Trigger automatic background sync for any missing records
+      if (firestoreData.length > 0) {
+        await syncFirestoreToSheets(sheetData, firestoreData, accessToken, sId);
+      }
     } catch (err: any) {
       console.error("Database startup failure:", err);
       setAppError("Gagal menyambungkan ke Google Sheets. Pastikan Anda menyetujui semua izin yang diminta.");
@@ -332,14 +389,17 @@ export default function App() {
       }
 
       const merged = getMergedRecords(sheetData, firestoreData);
-      
-      if (merged.length > records.length) {
-        addToast("Entri Absensi Masuk Baru", "Berhasil menyinkronkan rekapan data Google Sheets & Firestore.");
-      } else {
-        addToast("Data Sinkron", "Berhasil menyinkronkan rekapan data Google Sheets & Firestore.");
-      }
-      
       setRecords(merged);
+
+      if (accessToken && spreadsheetId && firestoreData.length > 0) {
+        await syncFirestoreToSheets(sheetData, firestoreData, accessToken, spreadsheetId);
+      } else {
+        if (merged.length > records.length) {
+          addToast("Entri Absensi Masuk Baru", "Berhasil menyinkronkan rekapan data Google Sheets & Firestore.");
+        } else {
+          addToast("Data Sinkron", "Berhasil menyinkronkan rekapan data Google Sheets & Firestore.");
+        }
+      }
     } catch (err) {
       console.error("Refresh failure:", err);
     } finally {
