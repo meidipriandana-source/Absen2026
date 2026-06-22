@@ -1,0 +1,10 @@
+{
+  "name": "Sistem Absensi Karyawan",
+  "description": "Sistem absensi karyawan dengan tanda tangan digital, lokasi GPS real-time, dan database Google Sheets.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

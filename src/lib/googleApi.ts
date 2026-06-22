@@ -1,0 +1,285 @@
+import { AttendanceRecord } from "../types";
+
+// Constant for the name of the database spreadsheet
+export const SPREADSHEET_NAME = "Database Absensi Karyawan";
+
+// User-provided explicit resource details
+export const EXPLICIT_SPREADSHEET_ID = "1SgFNI-Ee8wxPETHYwLBUV4kdmXS1hcHouRuBhQDK16M";
+export const EXPLICIT_DRIVE_FOLDER_ID = "1NfLQUwbRNkGmkPpZ6YEIageZ9AQdDUBE";
+
+/**
+ * Searches Google Drive for a file with the given name and mimeType.
+ * Returns the file ID if found, otherwise null.
+ */
+export async function findSpreadsheet(accessToken: string): Promise<string | null> {
+  const query = `name='${SPREADSHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error("Error finding spreadsheet in Drive:", errorText);
+      return null;
+    }
+
+    const data = await res.json();
+    if (data.files && data.files.length > 0) {
+      return data.files[0].id; // Return the first match
+    }
+    return null;
+  } catch (error) {
+    console.error("Network error finding spreadsheet:", error);
+    return null;
+  }
+}
+
+/**
+ * Moves a file to a specific Google Drive folder.
+ */
+export async function moveFileToFolder(accessToken: string, fileId: string, folderId: string): Promise<void> {
+  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?addParents=${encodeURIComponent(folderId)}&fields=id,parents`;
+  try {
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error(`Warning: Failed to move spreadsheet to designated folder ${folderId}:`, errorText);
+    } else {
+      console.log(`Successfully placed/copied reference in designated Google Drive folder: ${folderId}`);
+    }
+  } catch (error) {
+    console.error("Network error moving file in Drive:", error);
+  }
+}
+
+/**
+ * Creates a new Google Spreadsheet and initializes its headers.
+ * Returns the spreadsheet ID on success.
+ */
+export async function createSpreadsheet(accessToken: string): Promise<string> {
+  // Create spreadsheet metadata
+  const createUrl = "https://sheets.googleapis.com/v4/spreadsheets";
+  const body = {
+    properties: {
+      title: SPREADSHEET_NAME,
+    },
+  };
+
+  const createRes = await fetch(createUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!createRes.ok) {
+    const errText = await createRes.text();
+    throw new Error(`Failed to create spreadsheet: ${errText}`);
+  }
+
+  const sheetData = await createRes.json();
+  const spreadsheetId = sheetData.spreadsheetId;
+
+  // Move it to the specified Drive folder if available
+  if (EXPLICIT_DRIVE_FOLDER_ID) {
+    await moveFileToFolder(accessToken, spreadsheetId, EXPLICIT_DRIVE_FOLDER_ID);
+  }
+
+  // Now, initialize the column headers in Sheet1
+  const initHeadersUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Sheet1!A1:K1?valueInputOption=USER_ENTERED`;
+  const headersBody = {
+    range: "Sheet1!A1:K1",
+    majorDimension: "ROWS",
+    values: [
+      [
+        "Timestamp",
+        "Tanggal Kegiatan",
+        "Nama Lengkap",
+        "NIP/NRPTT",
+        "Instansi",
+        "Jabatan",
+        "Email",
+        "Latitude",
+        "Longitude",
+        "URL Lokasi",
+        "Tanda Tangan (SVG)"
+      ],
+    ],
+  };
+
+  const headersRes = await fetch(initHeadersUrl, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(headersBody),
+  });
+
+  if (!headersRes.ok) {
+    const errText = await headersRes.text();
+    console.error("Warning: Failed to initialize column headers in Sheets:", errText);
+  }
+
+  return spreadsheetId;
+}
+
+/**
+ * Helper to retrieve or automatically create the spreadsheet.
+ */
+export async function getOrCreateSpreadsheet(accessToken: string): Promise<string> {
+  // 1. Attempt to check if we can query/write to the user-supplied explicit Google Sheet
+  if (EXPLICIT_SPREADSHEET_ID) {
+    try {
+      const pingUrl = `https://sheets.googleapis.com/v4/spreadsheets/${EXPLICIT_SPREADSHEET_ID}?fields=spreadsheetId`;
+      const pingRes = await fetch(pingUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      if (pingRes.ok) {
+        console.log(`Verified access to handpicked Google Sheet ID: ${EXPLICIT_SPREADSHEET_ID}`);
+        return EXPLICIT_SPREADSHEET_ID;
+      } else {
+        console.warn(`Handpicked Google Sheet ID ${EXPLICIT_SPREADSHEET_ID} returned status ${pingRes.status}. Reverting to standard flow...`);
+      }
+    } catch (e) {
+      console.warn("Error contacting custom spreadsheet ID, reverting to discovery:", e);
+    }
+  }
+
+  // 2. Discover or create dynamically
+  const existingId = await findSpreadsheet(accessToken);
+  if (existingId) {
+    return existingId;
+  }
+  return await createSpreadsheet(accessToken);
+}
+
+/**
+ * Appends a new attendance record as a row in Sheet1.
+ */
+export async function appendAttendanceRecord(
+  accessToken: string,
+  spreadsheetId: string,
+  record: AttendanceRecord
+): Promise<void> {
+  const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Sheet1!A:K:append?valueInputOption=USER_ENTERED`;
+  
+  const body = {
+    range: "Sheet1!A:K",
+    majorDimension: "ROWS",
+    values: [
+      [
+        record.timestamp,
+        record.tanggalKegiatan,
+        record.namaLengkap,
+        record.nipNrptt,
+        record.instansi,
+        record.jabatan,
+        record.email,
+        record.latitude !== null ? record.latitude : "",
+        record.longitude !== null ? record.longitude : "",
+        record.urlLokasi,
+        record.tandaTangan,
+      ],
+    ],
+  };
+
+  const res = await fetch(appendUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Failed to append attendance record: ${errText}`);
+  }
+}
+
+/**
+ * Fetches all attendance records from the sheet and parses them.
+ */
+export async function getAttendanceRecords(
+  accessToken: string,
+  spreadsheetId: string
+): Promise<AttendanceRecord[]> {
+  const readUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Sheet1!A2:K1000`;
+
+  const res = await fetch(readUrl, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    // If the error indicates Sheet1 doesn't have any rows, it means database is empty
+    if (res.status === 400 || errText.includes("range")) {
+      return [];
+    }
+    throw new Error(`Failed to fetch records: ${errText}`);
+  }
+
+  const data = await res.json();
+  if (!data.values || data.values.length === 0) {
+    return [];
+  }
+
+  // Parse rows: [timestamp, tanggal, namaLengkap, nipNrptt, instansi, jabatan, email, lat, lng, mapUrl, signature]
+  return data.values.map((row: any[]) => {
+    // If table values are from the old format with only 8 columns, handle gracefully
+    const isOldFormat = row.length <= 8;
+    
+    if (isOldFormat) {
+      const latNum = parseFloat(row[4]);
+      const lngNum = parseFloat(row[5]);
+      return {
+        timestamp: row[0] || "",
+        tanggalKegiatan: row[1] || "",
+        namaLengkap: row[2] || "",
+        nipNrptt: "-",
+        instansi: "-",
+        jabatan: "-",
+        email: row[3] || "",
+        latitude: isNaN(latNum) ? null : latNum,
+        longitude: isNaN(lngNum) ? null : lngNum,
+        urlLokasi: row[6] || "",
+        tandaTangan: row[7] || "",
+      };
+    }
+
+    const latNum = parseFloat(row[7]);
+    const lngNum = parseFloat(row[8]);
+    return {
+      timestamp: row[0] || "",
+      tanggalKegiatan: row[1] || "",
+      namaLengkap: row[2] || "",
+      nipNrptt: row[3] || "",
+      instansi: row[4] || "",
+      jabatan: row[5] || "",
+      email: row[6] || "",
+      latitude: isNaN(latNum) ? null : latNum,
+      longitude: isNaN(lngNum) ? null : lngNum,
+      urlLokasi: row[9] || "",
+      tandaTangan: row[10] || "",
+    };
+  });
+}
