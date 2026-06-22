@@ -86,13 +86,10 @@ export const googleSignOut = async (): Promise<void> => {
 /**
  * Saves a single attendance record to Google Cloud Firestore database.
  */
-export const saveRecordToFirestore = async (userId: string, record: any): Promise<void> => {
+export const saveRecordToFirestore = async (record: any): Promise<void> => {
   try {
-    const docId = `${userId}_${record.timestamp.replace(/[^a-zA-Z0-9]/g, "_")}`;
-    await setDoc(doc(db, "attendance_records", docId), {
-      ...record,
-      userId,
-    });
+    const docId = record.timestamp.replace(/[^a-zA-Z0-9]/g, "_");
+    await setDoc(doc(db, "attendance_records", docId), record);
   } catch (error) {
     console.error("Error saving record to Firestore:", error);
     throw error;
@@ -100,20 +97,15 @@ export const saveRecordToFirestore = async (userId: string, record: any): Promis
 };
 
 /**
- * Retrieves all attendance records for the given user from Firestore.
+ * Retrieves all attendance records from Firestore.
  */
-export const getRecordsFromFirestore = async (userId: string): Promise<any[]> => {
+export const getRecordsFromFirestore = async (): Promise<any[]> => {
   try {
-    const q = query(
-      collection(db, "attendance_records"),
-      where("userId", "==", userId)
-    );
+    const q = collection(db, "attendance_records");
     const querySnapshot = await getDocs(q);
     const recordsList: any[] = [];
     querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      const { userId: _, ...recordData } = data;
-      recordsList.push(recordData);
+      recordsList.push(doc.data());
     });
     return recordsList;
   } catch (error) {
@@ -125,9 +117,9 @@ export const getRecordsFromFirestore = async (userId: string): Promise<any[]> =>
 /**
  * Deletes an attendance record from Firestore.
  */
-export const deleteRecordFromFirestore = async (userId: string, timestamp: string): Promise<void> => {
+export const deleteRecordFromFirestore = async (timestamp: string): Promise<void> => {
   try {
-    const docId = `${userId}_${timestamp.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    const docId = timestamp.replace(/[^a-zA-Z0-9]/g, "_");
     await deleteDoc(doc(db, "attendance_records", docId));
   } catch (error) {
     console.error("Error deleting record from Firestore:", error);

@@ -166,6 +166,23 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Load all central Firestore records on mount so that standard participants using smartphones can view all entries
+  useEffect(() => {
+    const loadGlobalFirestoreRecords = async () => {
+      try {
+        setIsLoadingRecords(true);
+        const firestoreData = await getRecordsFromFirestore();
+        setRecords((prev) => getMergedRecords([], firestoreData));
+      } catch (err) {
+        console.error("Gagal memuat rekap global Firestore pada start:", err);
+      } finally {
+        setIsLoadingRecords(false);
+      }
+    };
+
+    loadGlobalFirestoreRecords();
+  }, []);
+
   // Sync / initialize google sheet database when user token updates
   useEffect(() => {
     if (accessToken) {
@@ -189,12 +206,10 @@ export default function App() {
 
       // Fetch latest records from Cloud Firestore
       let firestoreData: AttendanceRecord[] = [];
-      if (auth.currentUser?.uid) {
-        try {
-          firestoreData = await getRecordsFromFirestore(auth.currentUser.uid);
-        } catch (fErr) {
-          console.error("Gagal mengambil data dari Firestore:", fErr);
-        }
+      try {
+        firestoreData = await getRecordsFromFirestore();
+      } catch (fErr) {
+        console.error("Gagal mengambil data dari Firestore:", fErr);
       }
 
       const merged = getMergedRecords(sheetData, firestoreData);
@@ -274,13 +289,11 @@ export default function App() {
         await deleteAttendanceRecord(accessToken, spreadsheetId, timestamp);
       }
 
-      // 3. Delete from Firestore if currentUser exists
-      if (currentUser?.uid) {
-        try {
-          await deleteRecordFromFirestore(currentUser.uid, timestamp);
-        } catch (fErr) {
-          console.error("Failed to delete from Firestore:", fErr);
-        }
+      // 3. Delete from Firestore
+      try {
+        await deleteRecordFromFirestore(timestamp);
+      } catch (fErr) {
+        console.error("Failed to delete from Firestore:", fErr);
       }
 
       addToast("Absensi Dihapus", "Satu data absen berhasil dihapus dari semua database.");
@@ -291,21 +304,21 @@ export default function App() {
   };
 
   const handleRefreshRecords = async () => {
-    if (!accessToken || !spreadsheetId) return;
     setIsLoadingRecords(true);
     try {
-      const data = await getAttendanceRecords(accessToken, spreadsheetId);
+      let sheetData: AttendanceRecord[] = [];
+      if (accessToken && spreadsheetId) {
+        sheetData = await getAttendanceRecords(accessToken, spreadsheetId);
+      }
       
       let firestoreData: AttendanceRecord[] = [];
-      if (currentUser?.uid) {
-        try {
-          firestoreData = await getRecordsFromFirestore(currentUser.uid);
-        } catch (fErr) {
-          console.error("Failed to load from Firestore during refresh:", fErr);
-        }
+      try {
+        firestoreData = await getRecordsFromFirestore();
+      } catch (fErr) {
+        console.error("Failed to load from Firestore during refresh:", fErr);
       }
 
-      const merged = getMergedRecords(data, firestoreData);
+      const merged = getMergedRecords(sheetData, firestoreData);
       
       if (merged.length > records.length) {
         addToast("Entri Absensi Masuk Baru", "Berhasil menyinkronkan rekapan data Google Sheets & Firestore.");
@@ -352,15 +365,13 @@ export default function App() {
       return [fullRecord, ...prev];
     });
 
-    // Save to Firestore if Firebase user is logged in
+    // Save to Firestore always (globally) so every participant's submission is stored in the same cloud database
     let savedToFirestore = false;
-    if (currentUser?.uid) {
-      try {
-        await saveRecordToFirestore(currentUser.uid, fullRecord);
-        savedToFirestore = true;
-      } catch (fErr) {
-        console.error("Failed to save to Firestore:", fErr);
-      }
+    try {
+      await saveRecordToFirestore(fullRecord);
+      savedToFirestore = true;
+    } catch (fErr) {
+      console.error("Failed to save to Firestore:", fErr);
     }
 
     // If Google account is connected, also synchronize to Google Sheets database!
@@ -426,32 +437,23 @@ export default function App() {
             ) : (
               /* Synchronized / Local Records List */
               <div className="space-y-6">
-                {needsAuth ? (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-wider">
-                      <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block animate-pulse"></span>
-                      <span>Penyimpanan Lokal Aktif</span>
-                    </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-wider">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                    <span>Database Cloud Aktif</span>
                   </div>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-wider">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                      <span>Database Cloud Aktif</span>
-                    </div>
-                    
-                    <button
-                      onClick={handleRefreshRecords}
-                      disabled={isLoadingRecords}
-                      className="flex items-center gap-1.5 text-[10px] font-extrabold text-slate-500 hover:text-indigo-600 border border-slate-200 hover:border-indigo-150 rounded-lg bg-white px-2.5 py-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer uppercase tracking-wider"
-                      title="Refresh Data"
-                      id="dashboard-refresh-btn"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${isLoadingRecords ? "animate-spin" : ""}`} />
-                      <span>Segarkan</span>
-                    </button>
-                  </div>
-                )}
+                  
+                  <button
+                    onClick={handleRefreshRecords}
+                    disabled={isLoadingRecords}
+                    className="flex items-center gap-1.5 text-[10px] font-extrabold text-slate-500 hover:text-indigo-600 border border-slate-200 hover:border-indigo-150 rounded-lg bg-white px-2.5 py-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer uppercase tracking-wider"
+                    title="Refresh Data"
+                    id="dashboard-refresh-btn"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isLoadingRecords ? "animate-spin" : ""}`} />
+                    <span>Segarkan</span>
+                  </button>
+                </div>
 
                 <Dashboard
                   records={records}
