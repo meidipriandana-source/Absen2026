@@ -65,20 +65,33 @@ export default function App() {
     }
     
     const map = new Map<string, AttendanceRecord>();
-    localData.forEach((r) => {
-      const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
-      map.set(key, r);
-    });
-    firestoreRecords.forEach((r) => {
-      const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
-      map.set(key, r);
-    });
-    sheetRecords.forEach((r) => {
-      const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
-      map.set(key, r);
-    });
+    if (Array.isArray(localData)) {
+      localData.forEach((r) => {
+        if (!r || !r.tanggalKegiatan || !r.namaLengkap) return;
+        const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
+        map.set(key, r);
+      });
+    }
+    if (Array.isArray(firestoreRecords)) {
+      firestoreRecords.forEach((r) => {
+        if (!r || !r.tanggalKegiatan || !r.namaLengkap) return;
+        const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
+        map.set(key, r);
+      });
+    }
+    if (Array.isArray(sheetRecords)) {
+      sheetRecords.forEach((r) => {
+        if (!r || !r.tanggalKegiatan || !r.namaLengkap) return;
+        const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
+        map.set(key, r);
+      });
+    }
 
-    return Array.from(map.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return Array.from(map.values()).sort((a, b) => {
+      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return timeB - timeA;
+    });
   };
 
   // Live Toast Notification list
@@ -214,12 +227,12 @@ export default function App() {
 
       const merged = getMergedRecords(sheetData, firestoreData);
       setRecords(merged);
-      setIsLoadingRecords(false);
     } catch (err: any) {
       console.error("Database startup failure:", err);
       setAppError("Gagal menyambungkan ke Google Sheets. Pastikan Anda menyetujui semua izin yang diminta.");
     } finally {
       setIsInitializingDb(false);
+      setIsLoadingRecords(false);
     }
   };
 
