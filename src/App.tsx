@@ -26,6 +26,7 @@ import {
   Loader2,
   RefreshCw,
   Bell,
+  LogOut,
 } from "lucide-react";
 
 interface ToastNotification {
@@ -41,6 +42,9 @@ export default function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isInitializingDb, setIsInitializingDb] = useState(false);
   const [activeTab, setActiveTab] = useState<"absen" | "rekap">("absen");
+
+  const ADMIN_EMAIL = "meidipriandana@gmail.com";
+  const isAdmin = currentUser && currentUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   // Database details
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
@@ -179,29 +183,12 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Load all central Firestore records on mount so that standard participants using smartphones can view all entries
+  // Sync / initialize Google Sheet database when authorized Admin token updates
   useEffect(() => {
-    const loadGlobalFirestoreRecords = async () => {
-      try {
-        setIsLoadingRecords(true);
-        const firestoreData = await getRecordsFromFirestore();
-        setRecords((prev) => getMergedRecords([], firestoreData));
-      } catch (err) {
-        console.error("Gagal memuat rekap global Firestore pada start:", err);
-      } finally {
-        setIsLoadingRecords(false);
-      }
-    };
-
-    loadGlobalFirestoreRecords();
-  }, []);
-
-  // Sync / initialize google sheet database when user token updates
-  useEffect(() => {
-    if (accessToken) {
+    if (accessToken && isAdmin) {
       bootstrapDatabase();
     }
-  }, [accessToken]);
+  }, [accessToken, isAdmin]);
 
   const syncFirestoreToSheets = async (
     sheetRecords: AttendanceRecord[],
@@ -495,8 +482,57 @@ export default function App() {
               isAuthenticating={isAuthenticating}
             />
           ) : (
-            /* Tab 2: Dashboard rekap list */
-            isInitializingDb ? (
+            /* Tab 2: Dashboard rekap list with Admin check */
+            !currentUser ? (
+              /* Admin Auth Wall - Prompt to Login */
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center bg-white rounded-3xl border border-slate-200 mt-4 space-y-6 animate-fade-in" id="admin-login-wall">
+                <div className="w-16 h-16 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-center justify-center">
+                  <ShieldAlert className="w-8 h-8 text-indigo-600" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-lg font-black text-slate-900 tracking-tight">Halaman Rekapitulasi Admin</h3>
+                  <p className="text-xs text-slate-500 max-w-xs leading-relaxed">
+                    Halaman ini berisi rekapan seluruh data kehadiran karyawan dan hanya boleh diakses oleh Admin yang berwenang.
+                  </p>
+                </div>
+                <button
+                  onClick={handleLogin}
+                  disabled={isAuthenticating}
+                  className="w-full max-w-xs bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3.5 px-6 rounded-2xl shadow-lg shadow-indigo-150 active:scale-95 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer select-none"
+                  id="admin-login-btn"
+                >
+                  {isAuthenticating ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 24 24">
+                      <path d="M12.24 10.285V13.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.866-3.577-7.866-8s3.536-8 7.866-8c2.46 0 4.105 1.025 5.047 1.926l2.427-2.334C17.955 2.192 15.34 1 12.24 1 6.033 1 1 6.033 1 12.24s5.033 11.24 11.24 11.24c6.478 0 10.793-4.537 10.793-10.986 0-.74-.08-1.305-.175-1.85l-10.618-.459z" />
+                    </svg>
+                  )}
+                  {isAuthenticating ? "Menghubungkan Google..." : "Masuk dengan Google Admin"}
+                </button>
+              </div>
+            ) : !isAdmin ? (
+              /* Access Denied Wall - email logged in but not meidipriandana@gmail.com */
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center bg-rose-50/50 border border-slate-200 rounded-3xl mt-4 space-y-6 animate-fade-in" id="admin-access-denied">
+                <div className="w-16 h-16 bg-rose-100 rounded-2xl flex items-center justify-center text-rose-600 border border-rose-200">
+                  <ShieldAlert className="w-8 h-8 animate-pulse" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-lg font-black text-rose-950 tracking-tight">Akses Ditolak</h3>
+                  <p className="text-xs text-rose-700 max-w-sm leading-relaxed">
+                    Sistem mendeteksi Anda masuk dengan akun <strong className="font-extrabold text-slate-900">{currentUser.email}</strong>. Akun ini tidak terdaftar sebagai Admin yang berwenang.
+                  </p>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="w-full max-w-xs bg-slate-900 hover:bg-slate-800 text-white font-extrabold py-3.5 px-6 rounded-2xl shadow-md active:scale-95 transition-all text-sm flex items-center justify-center gap-2 cursor-pointer select-none"
+                  id="admin-logout-switch-btn"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Keluarkan &amp; Ganti Akun</span>
+                </button>
+              </div>
+            ) : isInitializingDb ? (
               /* Connecting Database progress screen */
               <div className="flex flex-col items-center justify-center py-24 text-center space-y-5" id="db-init-progress">
                 <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
@@ -513,7 +549,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-wider">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                    <span>Database Cloud Aktif</span>
+                    <span>Database Cloud Aktif (Admin)</span>
                   </div>
                   
                   <button
