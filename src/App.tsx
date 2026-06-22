@@ -3,6 +3,10 @@ import {
   initAuth,
   googleSignIn,
   googleSignOut,
+  saveRecordToFirestore,
+  getRecordsFromFirestore,
+  deleteRecordFromFirestore,
+  auth,
 } from "./lib/firebase";
 import {
   getOrCreateSpreadsheet,
@@ -51,7 +55,7 @@ export default function App() {
   const [isLoadingRecords, setIsLoadingRecords] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
 
-  const getMergedRecords = (sheetRecords: AttendanceRecord[]): AttendanceRecord[] => {
+  const getMergedRecords = (sheetRecords: AttendanceRecord[], firestoreRecords: AttendanceRecord[] = []): AttendanceRecord[] => {
     let localData: AttendanceRecord[] = [];
     try {
       const stored = localStorage.getItem("local_attendance_records");
@@ -62,6 +66,10 @@ export default function App() {
     
     const map = new Map<string, AttendanceRecord>();
     localData.forEach((r) => {
+      const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
+      map.set(key, r);
+    });
+    firestoreRecords.forEach((r) => {
       const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
       map.set(key, r);
     });
@@ -143,6 +151,7 @@ export default function App() {
       (user, token) => {
         setAccessToken(token);
         setCurrentUser({
+          uid: user.uid,
           name: user.displayName || "Karyawan",
           email: user.email || "",
           photoURL: user.photoURL || "",
@@ -174,10 +183,21 @@ export default function App() {
       const sId = await getOrCreateSpreadsheet(accessToken);
       setSpreadsheetId(sId);
       
-      // Fetch latest records
+      // Fetch latest records from Google Sheets
       setIsLoadingRecords(true);
-      const data = await getAttendanceRecords(accessToken, sId);
-      const merged = getMergedRecords(data);
+      const sheetData = await getAttendanceRecords(accessToken, sId);
+
+      // Fetch latest records from Cloud Firestore
+      let firestoreData: AttendanceRecord[] = [];
+      if (auth.currentUser?.uid) {
+        try {
+          firestoreData = await getRecordsFromFirestore(auth.currentUser.uid);
+        } catch (fErr) {
+          console.error("Gagal mengambil data dari Firestore:", fErr);
+        }
+      }
+
+      const merged = getMergedRecords(sheetData, firestoreData);
       setRecords(merged);
       setIsLoadingRecords(false);
     } catch (err: any) {
@@ -196,6 +216,7 @@ export default function App() {
       if (result) {
         setAccessToken(result.accessToken);
         setCurrentUser({
+          uid: result.user.uid,
           name: result.user.displayName || "Karyawan",
           email: result.user.email || "",
           photoURL: result.user.photoURL || "",
@@ -251,13 +272,21 @@ export default function App() {
       // 2. Safely sync changes to Google Sheets if authorized
       if (accessToken && spreadsheetId) {
         await deleteAttendanceRecord(accessToken, spreadsheetId, timestamp);
-        addToast("Absensi Dihapus", "Satu data absen berhasil dihapus dari Google Sheets dan riwayat lokal.");
-      } else {
-        addToast("Absensi Lokal Dihapus", "Satu data absen berhasil dihapus secara lokal dari perangkat ini.");
       }
+
+      // 3. Delete from Firestore if currentUser exists
+      if (currentUser?.uid) {
+        try {
+          await deleteRecordFromFirestore(currentUser.uid, timestamp);
+        } catch (fErr) {
+          console.error("Failed to delete from Firestore:", fErr);
+        }
+      }
+
+      addToast("Absensi Dihapus", "Satu data absen berhasil dihapus dari semua database.");
     } catch (err) {
       console.error("Failed to delete record:", err);
-      addToast("Gagal Menghapus", "Gagal menyelaraskan penghapusan dengan spreadsheet online.");
+      addToast("Gagal Menghapus", "Terjadi kesalahan saat menghapus data.");
     }
   };
 
@@ -266,12 +295,22 @@ export default function App() {
     setIsLoadingRecords(true);
     try {
       const data = await getAttendanceRecords(accessToken, spreadsheetId);
-      const merged = getMergedRecords(data);
+      
+      let firestoreData: AttendanceRecord[] = [];
+      if (currentUser?.uid) {
+        try {
+          firestoreData = await getRecordsFromFirestore(currentUser.uid);
+        } catch (fErr) {
+          console.error("Failed to load from Firestore during refresh:", fErr);
+        }
+      }
+
+      const merged = getMergedRecords(data, firestoreData);
       
       if (merged.length > records.length) {
-        addToast("Entri Absensi Masuk Baru", "Berhasil menyinkronkan rekapan data Google Sheets.");
+        addToast("Entri Absensi Masuk Baru", "Berhasil menyinkronkan rekapan data Google Sheets & Firestore.");
       } else {
-        addToast("Data Sinkron", "Berhasil menyinkronkan rekapan data Google Sheets.");
+        addToast("Data Sinkron", "Berhasil menyinkronkan rekapan data Google Sheets & Firestore.");
       }
       
       setRecords(merged);
@@ -313,17 +352,28 @@ export default function App() {
       return [fullRecord, ...prev];
     });
 
+    // Save to Firestore if Firebase user is logged in
+    let savedToFirestore = false;
+    if (currentUser?.uid) {
+      try {
+        await saveRecordToFirestore(currentUser.uid, fullRecord);
+        savedToFirestore = true;
+      } catch (fErr) {
+        console.error("Failed to save to Firestore:", fErr);
+      }
+    }
+
     // If Google account is connected, also synchronize to Google Sheets database!
     if (accessToken && spreadsheetId) {
       try {
         await appendAttendanceRecord(accessToken, spreadsheetId, fullRecord);
-        addToast("Absen Masuk Berhasil!", `Halo ${fullRecord.namaLengkap}, terkirim ke Google Sheets & disimpan.`);
+        addToast("Absen Masuk Berhasil!", `Halo ${fullRecord.namaLengkap}, terkirim ke Google Sheets & Firestore.`);
       } catch (err) {
         console.error("Google Sheets append failed:", err);
-        addToast("Tersimpan Lokal", "Berhasil disimpan lokal! Sinkronisasi Google Sheets tertunda.");
+        addToast("Tersimpan Cloud", `Berhasil disimpan di Cloud ${savedToFirestore ? "Firestore" : "Lokal"}. Sinkronisasi Google Sheets ditunda.`);
       }
     } else {
-      addToast("Absen Masuk Berhasil!", `Halo ${fullRecord.namaLengkap}, kehadiran Anda terekam di Rekap Harian.`);
+      addToast("Absen Masuk Berhasil!", `Halo ${fullRecord.namaLengkap}, kehadiran Anda terekam di Rekap Harian (Cloud Firestore).`);
     }
   };
 

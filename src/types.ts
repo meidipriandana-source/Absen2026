@@ -13,6 +13,7 @@ export interface AttendanceRecord {
 }
 
 export interface UserProfile {
+  uid: string;
   name: string;
   email: string;
   photoURL: string;
