@@ -4,8 +4,8 @@ import { AttendanceRecord } from "../types";
 export const SPREADSHEET_NAME = "Database Absensi Karyawan";
 
 // User-provided explicit resource details
-export const EXPLICIT_SPREADSHEET_ID = "1SgFNI-Ee8wxPETHYwLBUV4kdmXS1hcHouRuBhQDK16M";
-export const EXPLICIT_DRIVE_FOLDER_ID = "1NfLQUwbRNkGmkPpZ6YEIageZ9AQdDUBE";
+export const EXPLICIT_SPREADSHEET_ID = "1Fu2MejKfS_Nm7AdqwERfaU22QBanPeYG8fQeILciwpw";
+export const EXPLICIT_DRIVE_FOLDER_ID = "1UseBW7ICFFT-cUPD1HC3KrJUhLCVgEgR";
 
 /**
  * Searches Google Drive for a file with the given name and mimeType.
@@ -152,6 +152,54 @@ export async function getOrCreateSpreadsheet(accessToken: string): Promise<strin
       });
       if (pingRes.ok) {
         console.log(`Verified access to handpicked Google Sheet ID: ${EXPLICIT_SPREADSHEET_ID}`);
+        
+        // Check if headers are already initialized in Sheet1
+        try {
+          const checkUrl = `https://sheets.googleapis.com/v4/spreadsheets/${EXPLICIT_SPREADSHEET_ID}/values/Sheet1!A1:A1`;
+          const checkRes = await fetch(checkUrl, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          });
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            if (!checkData.values || checkData.values.length === 0) {
+              // Create column headers
+              const initHeadersUrl = `https://sheets.googleapis.com/v4/spreadsheets/${EXPLICIT_SPREADSHEET_ID}/values/Sheet1!A1:K1?valueInputOption=USER_ENTERED`;
+              const headersBody = {
+                range: "Sheet1!A1:K1",
+                majorDimension: "ROWS",
+                values: [
+                  [
+                    "Timestamp",
+                    "Tanggal Kegiatan",
+                    "Nama Lengkap",
+                    "NIP/NRPTT",
+                    "Instansi",
+                    "Jabatan",
+                    "Email",
+                    "Latitude",
+                    "Longitude",
+                    "URL Lokasi",
+                    "Tanda Tangan (SVG)"
+                  ],
+                ],
+              };
+              await fetch(initHeadersUrl, {
+                method: "PUT",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(headersBody),
+              });
+              console.log("Initialized column headers on handpicked spreadsheet.");
+            }
+          }
+        } catch (hdrErr) {
+          console.warn("Could not auto-initialize headers on custom spreadsheet:", hdrErr);
+        }
+        
         return EXPLICIT_SPREADSHEET_ID;
       } else {
         console.warn(`Handpicked Google Sheet ID ${EXPLICIT_SPREADSHEET_ID} returned status ${pingRes.status}. Reverting to standard flow...`);

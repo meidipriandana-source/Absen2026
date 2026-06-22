@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidAttendanceRecord(data) {
+      return data.keys().hasAll(['namaLengkap', 'nipNrptt', 'instansi', 'jabatan', 'email', 'tanggalKegiatan', 'latitude', 'longitude', 'urlLokasi', 'tandaTangan', 'timestamp'])
+        && data.keys().size() == 11
+        && data.namaLengkap is string && data.namaLengkap.size() <= 600
+        && data.nipNrptt is string && data.nipNrptt.size() <= 200
+        && data.instansi is string && data.instansi.size() <= 600
+        && data.jabatan is string && data.jabatan.size() <= 600
+        && data.email is string && data.email.size() <= 300
+        && data.tanggalKegiatan is string && data.tanggalKegiatan.size() <= 100
+        && (data.latitude == null || data.latitude is number)
+        && (data.longitude == null || data.longitude is number)
+        && data.urlLokasi is string && data.urlLokasi.size() <= 600
+        && data.tandaTangan is string && data.tandaTangan.size() <= 1000000
+        && data.timestamp is string && data.timestamp.size() <= 100;
+    }
+
+    // Match block for attendance_records
+    match /attendance_records/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if true;
+      
+      allow create: if isValidId(docId) 
+        && isValidAttendanceRecord(incoming());
+        
+      allow update: if isValidId(docId)
+        && isValidAttendanceRecord(incoming());
+        
+      allow delete: if isValidId(docId);
+    }
+  }
+}

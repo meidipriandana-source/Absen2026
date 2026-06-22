@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "An attendance record submitted by an employee or participant.",
+      "type": "object",
+      "properties": {
+        "namaLengkap": { "type": "string", "description": "Nama Lengkap" },
+        "nipNrptt": { "type": "string", "description": "NIP atau NRPTT" },
+        "instansi": { "type": "string", "description": "Instansi tempat bertugas" },
+        "jabatan": { "type": "string", "description": "Jabatan" },
+        "email": { "type": "string", "description": "Email" },
+        "tanggalKegiatan": { "type": "string", "description": "Tanggal Kegiatan" },
+        "latitude": { "type": "number", "description": "Lattitude koordinat lokasi" },
+        "longitude": { "type": "number", "description": "Longitude koordinat lokasi" },
+        "urlLokasi": { "type": "string", "description": "URL Lokasi Google Maps" },
+        "tandaTangan": { "type": "string", "description": "Data SVG Tanda Tangan" },
+        "timestamp": { "type": "string", "description": "Waktu absensi secara ISO string" }
+      },
+      "required": [
+        "namaLengkap",
+        "nipNrptt",
+        "instansi",
+        "jabatan",
+        "email",
+        "tanggalKegiatan",
+        "urlLokasi",
+        "tandaTangan",
+        "timestamp"
+      ]
+    }
+  },
+  "firestore": {
+    "attendance_records/{docId}": {
+      "schema": "AttendanceRecord",
+      "description": "Koleksi yang menyimpan seluruh catatan absensi masuk peserta."
+    }
+  }
+}
