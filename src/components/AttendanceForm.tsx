@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { MapPin, Calendar, User, Mail, Send, CheckCircle2, ShieldAlert } from "lucide-react";
+import { MapPin, Calendar, User, Mail, Send, CheckCircle2, ShieldAlert, Loader2 } from "lucide-react";
 import SignaturePad from "./SignaturePad";
 import { AttendanceRecord, UserProfile } from "../types";
 
 interface AttendanceFormProps {
   user: UserProfile | null;
-  onSubmit: (record: Omit<AttendanceRecord, "timestamp" | "email">) => Promise<void>;
+  onSubmit: (record: Omit<AttendanceRecord, "timestamp">) => Promise<void>;
   isLoading: boolean;
   needsAuth: boolean;
   onLogin: () => Promise<void>;
@@ -44,8 +44,8 @@ export default function AttendanceForm({
 
   // Fallback states for manual coordinates if Geolocation is blocked
   const [isManualLocation, setIsManualLocation] = useState(false);
-  const [manualLatitude, setManualLatitude] = useState("-6.2088");
-  const [manualLongitude, setManualLongitude] = useState("106.8456");
+  const [manualLatitude, setManualLatitude] = useState("3.3259");
+  const [manualLongitude, setManualLongitude] = useState("117.5936");
 
   // Sync back state on mount/update when Google profile is fetched
   useEffect(() => {
@@ -92,6 +92,31 @@ export default function AttendanceForm({
   useEffect(() => {
     fetchLocation();
   }, []);
+
+  // Show a confirmation dialog before closing browser tab if form has unsaved edits
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      const isDirty = !formSubmitted && (
+        (employeeName.trim() !== "" && employeeName !== (user?.name || "")) ||
+        nipNrptt.trim() !== "" ||
+        instansi.trim() !== "" ||
+        jabatan.trim() !== "" ||
+        signatureSvg !== ""
+      );
+
+      if (isDirty) {
+        e.preventDefault();
+        // Modern browsers require setting returnValue
+        e.returnValue = "Ada data absensi yang belum terkirim. Apakah Anda yakin ingin meninggalkan halaman ini?";
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [employeeName, nipNrptt, instansi, jabatan, signatureSvg, formSubmitted, user]);
 
   const fetchLocation = () => {
     if (!navigator.geolocation) {
@@ -157,16 +182,6 @@ export default function AttendanceForm({
       return;
     }
 
-    if (needsAuth) {
-      alert("Silakan hubungkan akun Google Anda terlebih dahulu untuk merekam dan menyimpan data absensi.");
-      try {
-        await onLogin();
-      } catch (err) {
-        console.error("Sign-in failed:", err);
-      }
-      return;
-    }
-
     let finalLat = latitude;
     let finalLng = longitude;
 
@@ -197,11 +212,13 @@ export default function AttendanceForm({
 
     try {
       const gmapsUrl = `https://www.google.com/maps?q=${finalLat},${finalLng}`;
+      const recordEmail = user?.email || "-";
       await onSubmit({
         namaLengkap: employeeName,
         nipNrptt,
         instansi,
         jabatan,
+        email: recordEmail,
         tanggalKegiatan: activityDate,
         latitude: finalLat,
         longitude: finalLng,
@@ -210,6 +227,8 @@ export default function AttendanceForm({
       });
       // Clear specific drafts on successful submit
       localStorage.removeItem("temp_signatureSvg");
+      setLatitude(finalLat);
+      setLongitude(finalLng);
       setFormSubmitted(true);
     } catch (err) {
       console.error("Attendance submission error:", err);
@@ -373,32 +392,6 @@ export default function AttendanceForm({
         </div>
       </div>
 
-      {/* Input Email (Readonly / Auto Auth link) */}
-      <div className="space-y-1">
-        <label className="text-[10px] uppercase tracking-widest text-slate-400 font-extrabold block" htmlFor="field-email">
-          Alamat Email (Akun Google Terhubung)
-        </label>
-        {needsAuth ? (
-          <button
-            type="button"
-            onClick={onLogin}
-            disabled={isAuthenticating}
-            className="w-full text-left bg-indigo-50 hover:bg-indigo-100/80 border border-dashed border-indigo-200 rounded-xl py-3 px-4 text-xs text-indigo-700 font-bold flex items-center justify-between cursor-pointer transition-all active:scale-97 shadow-2xs"
-          >
-            <span>Hubungkan Akun Google Anda</span>
-            <span className="text-[9px] uppercase tracking-wider bg-indigo-150 text-indigo-800 px-2.5 py-1 rounded-md font-extrabold">Sambungkan</span>
-          </button>
-        ) : (
-          <input
-            id="field-email"
-            type="email"
-            readOnly
-            value={user?.email || ""}
-            className="w-full bg-slate-100 border border-slate-200 rounded-xl py-3 px-4 text-sm text-slate-500 outline-none cursor-not-allowed font-medium font-mono"
-          />
-        )}
-      </div>
-
       {/* Input Tanggal Kegiatan */}
       <div className="space-y-1">
         <label className="text-[10px] uppercase tracking-widest text-slate-400 font-extrabold block" htmlFor="field-tanggal">
@@ -470,32 +463,22 @@ export default function AttendanceForm({
               <button
                 type="button"
                 onClick={() => {
+                  setManualLatitude("3.3259");
+                  setManualLongitude("117.5936");
+                }}
+                className="bg-indigo-600 text-white hover:bg-indigo-700 font-extrabold px-3 py-1 rounded-lg text-[10px] transition-all active:scale-95 shadow-xs"
+              >
+                RSUD dr H Jusuf SK (3.3259, 117.5936)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   setManualLatitude("-6.2088");
                   setManualLongitude("106.8456");
                 }}
                 className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-2.5 py-1 rounded-lg text-[10px] transition-all active:scale-95"
               >
-                Jakarta (-6.2088, 106.8456)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setManualLatitude("-6.9175");
-                  setManualLongitude("107.6191");
-                }}
-                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-2.5 py-1 rounded-lg text-[10px] transition-all active:scale-95"
-              >
-                Bandung (-6.9175, 107.6191)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setManualLatitude("-7.2575");
-                  setManualLongitude("112.7521");
-                }}
-                className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-2.5 py-1 rounded-lg text-[10px] transition-all active:scale-95"
-              >
-                Surabaya (-7.2575, 112.7521)
+                Jakarta (Back-up)
               </button>
             </div>
           </div>
@@ -549,16 +532,20 @@ export default function AttendanceForm({
       {/* Submit Button */}
       <button
         type="submit"
-        disabled={isLoading || isGettingLocation || isAuthenticating}
+        disabled={isLoading || isGettingLocation}
         className={`w-full text-white font-extrabold py-4 rounded-2xl shadow-lg transition-all active:scale-95 select-none text-sm mt-6 flex items-center justify-center gap-2 ${
-          isLoading || isAuthenticating
+          isLoading
             ? "bg-slate-400 cursor-not-allowed shadow-none"
             : "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-150 cursor-pointer"
         }`}
         id="btn-submit-absensi"
       >
-        <Send className="w-4 h-4" />
-        {isAuthenticating ? "Menghubungkan Google..." : isLoading ? "Menyimpan ke Google Sheets..." : needsAuth ? "Kirim Presensi (Hubungkan Google)" : "Kirim Absen Sekarang"}
+        {isLoading ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <Send className="w-4 h-4" />
+        )}
+        {isLoading ? "Mengirim Presensi..." : "Kirim Absen Sekarang"}
       </button>
     </form>
   );

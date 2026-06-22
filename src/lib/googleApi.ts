@@ -283,3 +283,171 @@ export async function getAttendanceRecords(
     };
   });
 }
+
+/**
+ * Deletes a row containing the specified timestamp from Google Sheets.
+ */
+export async function deleteAttendanceRecord(
+  accessToken: string,
+  spreadsheetId: string,
+  timestamp: string
+): Promise<void> {
+  // First, retrieve current sheet values to locate the correct row index
+  const readUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Sheet1!A1:A1000`;
+
+  const res = await fetch(readUrl, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to read spreadsheet for deletion`);
+  }
+
+  const data = await res.json();
+  if (!data.values || data.values.length === 0) {
+    return;
+  }
+
+  // Row 1 is header (index 0). Find match:
+  const rowIndex = data.values.findIndex((row: any[]) => row[0] === timestamp);
+  
+  if (rowIndex === -1) {
+    console.warn("Timestamp not found in Google Sheets");
+    return;
+  }
+
+  const deleteUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`;
+
+  // Try standard delete with sheetId 0
+  const body = {
+    requests: [
+      {
+        deleteDimension: {
+          range: {
+            sheetId: 0,
+            dimension: "ROWS",
+            startIndex: rowIndex,
+            endIndex: rowIndex + 1
+          }
+        }
+      }
+    ]
+  };
+
+  const response = await fetch(deleteUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    console.warn("Deletions fallback because:", errText);
+    
+    // Attempt dynamic sheetId retrieval if sheetId 0 doesn't work
+    const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(sheetId,title))`;
+    const metaRes = await fetch(metaUrl, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    if (metaRes.ok) {
+      const metaData = await metaRes.json();
+      const sheet = metaData.sheets?.find(
+        (s: any) => s.properties?.title === "Sheet1"
+      );
+      if (sheet) {
+        const dynamicSheetId = sheet.properties.sheetId;
+        const fallbackBody = {
+          requests: [
+            {
+              deleteDimension: {
+                range: {
+                  sheetId: dynamicSheetId,
+                  dimension: "ROWS",
+                  startIndex: rowIndex,
+                  endIndex: rowIndex + 1
+                }
+              }
+            }
+          ]
+        };
+        const fallbackRes = await fetch(deleteUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(fallbackBody),
+        });
+        if (!fallbackRes.ok) {
+          const fbErr = await fallbackRes.text();
+          throw new Error(`Failed code deletion: ${fbErr}`);
+        }
+      } else {
+        throw new Error(`Failed to find Sheet1 in spreadsheet metadata`);
+      }
+    } else {
+      throw new Error(`Failed to delete row from Google Sheets: ${errText}`);
+    }
+  }
+}
+
+/**
+ * Uploads a generated PDF blob directly to Google Drive.
+ */
+export async function uploadPdfToDrive(
+  accessToken: string,
+  pdfBlob: Blob,
+  fileName: string,
+  parentFolderId?: string
+): Promise<string> {
+  const metadata: any = {
+    name: fileName,
+    mimeType: "application/pdf",
+  };
+
+  if (parentFolderId) {
+    metadata.parents = [parentFolderId];
+  }
+
+  const boundary = "314159265358979323846";
+  const header = 
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    `${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Type: application/pdf\r\n\r\n`;
+    
+  const footer = `\r\n--${boundary}--`;
+
+  const multipartBlob = new Blob([
+    header,
+    pdfBlob,
+    footer
+  ], { type: `multipart/related; boundary=${boundary}` });
+
+  const url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink";
+  
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: multipartBlob,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gagal mengunggah ke Google Drive: ${errText}`);
+  }
+
+  const data = await res.json();
+  return data.webViewLink || `https://drive.google.com/file/d/${data.id}/view`;
+}
+

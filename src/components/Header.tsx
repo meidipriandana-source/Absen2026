@@ -14,17 +14,22 @@ export default function Header({ user, onLogout, onLogin }: HeaderProps) {
       <div className="max-w-md mx-auto flex items-center justify-between">
         {/* Brand/Title Logo */}
         <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-indigo-600 shadow-md">
-            <UserCheck className="w-5.5 h-5.5" />
+          <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-md p-1 overflow-hidden">
+            <img
+              src="https://i.ibb.co.com/QFrfgSZJ/LOGO-KALIMANTAN-UTARA-koleksilogo-com-2-1.png"
+              alt="Logo Kalimantan Utara"
+              className="w-8 h-8 object-contain"
+              referrerPolicy="no-referrer"
+            />
           </div>
           <div>
-            <h1 className="text-base font-black leading-tight tracking-tight">Absen Mandiri</h1>
-            <p className="text-[9px] font-bold text-indigo-200 uppercase tracking-widest leading-none">PENGISIAN CEPAT</p>
+            <h1 className="text-base font-black leading-tight tracking-tight">Absen Peserta</h1>
+            <p className="text-[9px] font-bold text-indigo-200 uppercase tracking-widest leading-none">RSUD dr H Jusuf SK</p>
           </div>
         </div>
 
         {/* User profile & Log Out */}
-        {user ? (
+        {user && (
           <div className="flex items-center gap-2.5">
             <div className="text-right hidden xs:block">
               <div className="text-xs font-bold text-white line-clamp-1">{user.name}</div>
@@ -53,16 +58,6 @@ export default function Header({ user, onLogout, onLogin }: HeaderProps) {
               <LogOut className="w-4 h-4" />
             </button>
           </div>
-        ) : (
-          onLogin && (
-            <button
-              onClick={onLogin}
-              className="bg-indigo-700 hover:bg-indigo-800 text-[10px] uppercase tracking-wider font-extrabold px-3 py-2 rounded-xl border border-indigo-500/40 shadow-sm transition-all active:scale-95"
-              id="header-login-btn"
-            >
-              Log In Google
-            </button>
-          )
         )}
       </div>
     </header>

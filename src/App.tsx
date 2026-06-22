@@ -8,6 +8,7 @@ import {
   getOrCreateSpreadsheet,
   appendAttendanceRecord,
   getAttendanceRecords,
+  deleteAttendanceRecord,
   SPREADSHEET_NAME,
 } from "./lib/googleApi";
 import { AttendanceRecord, UserProfile } from "./types";
@@ -39,9 +40,38 @@ export default function App() {
 
   // Database details
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>(() => {
+    try {
+      const stored = localStorage.getItem("local_attendance_records");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isLoadingRecords, setIsLoadingRecords] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
+
+  const getMergedRecords = (sheetRecords: AttendanceRecord[]): AttendanceRecord[] => {
+    let localData: AttendanceRecord[] = [];
+    try {
+      const stored = localStorage.getItem("local_attendance_records");
+      localData = stored ? JSON.parse(stored) : [];
+    } catch (err) {
+      console.warn("Failed to read local records:", err);
+    }
+    
+    const map = new Map<string, AttendanceRecord>();
+    localData.forEach((r) => {
+      const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
+      map.set(key, r);
+    });
+    sheetRecords.forEach((r) => {
+      const key = `${r.tanggalKegiatan}_${r.namaLengkap}`;
+      map.set(key, r);
+    });
+
+    return Array.from(map.values()).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  };
 
   // Live Toast Notification list
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
@@ -147,7 +177,8 @@ export default function App() {
       // Fetch latest records
       setIsLoadingRecords(true);
       const data = await getAttendanceRecords(accessToken, sId);
-      setRecords(data);
+      const merged = getMergedRecords(data);
+      setRecords(merged);
       setIsLoadingRecords(false);
     } catch (err: any) {
       console.error("Database startup failure:", err);
@@ -195,23 +226,55 @@ export default function App() {
     }
   };
 
+  const handleClearLocalHistory = () => {
+    try {
+      localStorage.removeItem("local_attendance_records");
+      setRecords([]);
+      addToast("Riwayat Terhapus", "Seluruh riwayat absensi lokal berhasil dihapus.");
+    } catch (err) {
+      console.error("Failed to clear local records:", err);
+      addToast("Penghapusan Gagal", "Gagal menghapus riwayat dari perangkat ini.");
+    }
+  };
+
+  const handleDeleteRecord = async (timestamp: string) => {
+    try {
+      // 1. Instantly remove from local storage and React state for optimal responsive latency
+      const stored = localStorage.getItem("local_attendance_records");
+      if (stored) {
+        const parsed: AttendanceRecord[] = JSON.parse(stored);
+        const filtered = parsed.filter((r) => r.timestamp !== timestamp);
+        localStorage.setItem("local_attendance_records", JSON.stringify(filtered));
+      }
+      setRecords((prev) => prev.filter((r) => r.timestamp !== timestamp));
+
+      // 2. Safely sync changes to Google Sheets if authorized
+      if (accessToken && spreadsheetId) {
+        await deleteAttendanceRecord(accessToken, spreadsheetId, timestamp);
+        addToast("Absensi Dihapus", "Satu data absen berhasil dihapus dari Google Sheets dan riwayat lokal.");
+      } else {
+        addToast("Absensi Lokal Dihapus", "Satu data absen berhasil dihapus secara lokal dari perangkat ini.");
+      }
+    } catch (err) {
+      console.error("Failed to delete record:", err);
+      addToast("Gagal Menghapus", "Gagal menyelaraskan penghapusan dengan spreadsheet online.");
+    }
+  };
+
   const handleRefreshRecords = async () => {
     if (!accessToken || !spreadsheetId) return;
     setIsLoadingRecords(true);
     try {
       const data = await getAttendanceRecords(accessToken, spreadsheetId);
+      const merged = getMergedRecords(data);
       
-      // Compare counts of new incoming entries to fire a nice real-time update push toast
-      if (data.length > records.length) {
-        const incomingEntries = data.slice(records.length);
-        incomingEntries.forEach((entry) => {
-          addToast("Entri Absensi Masuk Baru", `${entry.namaLengkap} telah mengisi kehadiran!`);
-        });
+      if (merged.length > records.length) {
+        addToast("Entri Absensi Masuk Baru", "Berhasil menyinkronkan rekapan data Google Sheets.");
       } else {
         addToast("Data Sinkron", "Berhasil menyinkronkan rekapan data Google Sheets.");
       }
       
-      setRecords(data);
+      setRecords(merged);
     } catch (err) {
       console.error("Refresh failure:", err);
     } finally {
@@ -219,25 +282,49 @@ export default function App() {
     }
   };
 
-  const handleFormSubmission = async (recordData: Omit<AttendanceRecord, "timestamp" | "email">) => {
-    if (!accessToken || !spreadsheetId || !currentUser) {
-      throw new Error("Sesi login tidak sah");
-    }
-
+  const handleFormSubmission = async (recordData: Omit<AttendanceRecord, "timestamp">) => {
     const timestamp = new Date().toISOString();
     const fullRecord: AttendanceRecord = {
       ...recordData,
       timestamp,
-      email: currentUser.email,
     };
 
-    // Append to Google Sheets cloud database
-    await appendAttendanceRecord(accessToken, spreadsheetId, fullRecord);
+    // Always persist to localStorage
+    let updatedLocal: AttendanceRecord[] = [];
+    try {
+      const stored = localStorage.getItem("local_attendance_records");
+      const parsed = stored ? JSON.parse(stored) : [];
+      const exists = parsed.some((r: AttendanceRecord) => r.tanggalKegiatan === fullRecord.tanggalKegiatan && r.namaLengkap === fullRecord.namaLengkap);
+      if (!exists) {
+        updatedLocal = [...parsed, fullRecord];
+        localStorage.setItem("local_attendance_records", JSON.stringify(updatedLocal));
+      } else {
+        updatedLocal = parsed;
+      }
+    } catch {
+      updatedLocal = [fullRecord];
+      localStorage.setItem("local_attendance_records", JSON.stringify(updatedLocal));
+    }
 
-    // Append local record and trigger real-time toast
-    setRecords((prev) => [...prev, fullRecord]);
+    // Set local state
+    setRecords((prev) => {
+      const exists = prev.some(r => r.tanggalKegiatan === fullRecord.tanggalKegiatan && r.namaLengkap === fullRecord.namaLengkap);
+      if (exists) return prev;
+      return [fullRecord, ...prev];
+    });
 
-    addToast("Absen Masuk Berhasil!", `Halo ${currentUser.name}, kehadiran Anda siap terekam.`);
+    // If Google account is connected, also synchronize to Google Sheets database!
+    if (accessToken && spreadsheetId) {
+      try {
+        await appendAttendanceRecord(accessToken, spreadsheetId, fullRecord);
+        addToast("Absen Masuk Berhasil!", `Halo ${fullRecord.namaLengkap}, terkirim ke Google Sheets & disimpan.`);
+      } catch (err) {
+        console.error("Google Sheets append failed:", err);
+        addToast("Tersimpan Lokal", "Berhasil disimpan lokal! Sinkronisasi Google Sheets tertunda.");
+      }
+    } else {
+      addToast("Absen Masuk Berhasil!", `Halo ${fullRecord.namaLengkap}, kehadiran Anda terekam di Rekap Harian.`);
+    }
   };
 
   return (
@@ -250,7 +337,7 @@ export default function App() {
       <div className="w-full max-w-md min-h-screen sm:min-h-[820px] bg-slate-50 relative flex flex-col justify-between sm:rounded-[2.8rem] sm:shadow-2xl sm:shadow-indigo-900/40 sm:border-[10px] sm:border-slate-900 overflow-hidden" id="smartphone-outer-shell">
         
         {/* Header Module */}
-        <Header user={currentUser} onLogout={handleLogout} onLogin={handleLogin} />
+        <Header user={currentUser} onLogout={handleLogout} />
 
         {/* Primary View Area */}
         <main className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
@@ -274,34 +361,8 @@ export default function App() {
               isAuthenticating={isAuthenticating}
             />
           ) : (
-            /* Tab 2: Dashboard rekap list with dynamic auth guard */
-            needsAuth ? (
-              <div className="flex flex-col items-center justify-center py-20 px-4 text-center space-y-5" id="rekap-auth-required">
-                <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400">
-                  <LayoutDashboard className="w-8 h-8" />
-                </div>
-                <div className="space-y-1">
-                  <h4 className="font-extrabold text-slate-800 text-sm">Hubungkan Akun Google</h4>
-                  <p className="text-slate-400 text-xs max-w-xs leading-relaxed">
-                    Rekapan harian dimuat langsung secara realtime dari Google Sheets di akun Google Anda.
-                  </p>
-                </div>
-                <button
-                  onClick={handleLogin}
-                  disabled={isAuthenticating}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2.5 px-5 rounded-xl text-xs shrink-0 shadow-md shadow-indigo-150 transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  {isAuthenticating ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Menghubungkan...</span>
-                    </>
-                  ) : (
-                    <span>Hubungkan Google</span>
-                  )}
-                </button>
-              </div>
-            ) : isInitializingDb ? (
+            /* Tab 2: Dashboard rekap list */
+            isInitializingDb ? (
               /* Connecting Database progress screen */
               <div className="flex flex-col items-center justify-center py-24 text-center space-y-5" id="db-init-progress">
                 <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
@@ -313,27 +374,42 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              /* Synchronized Records List */
+              /* Synchronized / Local Records List */
               <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-wider">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-                    <span>Database Cloud Aktif</span>
+                {needsAuth ? (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-wider">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block animate-pulse"></span>
+                      <span>Penyimpanan Lokal Aktif</span>
+                    </div>
                   </div>
-                  
-                  <button
-                    onClick={handleRefreshRecords}
-                    disabled={isLoadingRecords}
-                    className="flex items-center gap-1.5 text-[10px] font-extrabold text-slate-500 hover:text-indigo-600 border border-slate-200 hover:border-indigo-150 rounded-lg bg-white px-2.5 py-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer uppercase tracking-wider"
-                    title="Refresh Data"
-                    id="dashboard-refresh-btn"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${isLoadingRecords ? "animate-spin" : ""}`} />
-                    <span>Segarkan</span>
-                  </button>
-                </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500 font-semibold uppercase tracking-wider">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                      <span>Database Cloud Aktif</span>
+                    </div>
+                    
+                    <button
+                      onClick={handleRefreshRecords}
+                      disabled={isLoadingRecords}
+                      className="flex items-center gap-1.5 text-[10px] font-extrabold text-slate-500 hover:text-indigo-600 border border-slate-200 hover:border-indigo-150 rounded-lg bg-white px-2.5 py-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer uppercase tracking-wider"
+                      title="Refresh Data"
+                      id="dashboard-refresh-btn"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isLoadingRecords ? "animate-spin" : ""}`} />
+                      <span>Segarkan</span>
+                    </button>
+                  </div>
+                )}
 
-                <Dashboard records={records} spreadsheetId={spreadsheetId || ""} />
+                <Dashboard
+                  records={records}
+                  spreadsheetId={spreadsheetId || ""}
+                  accessToken={accessToken}
+                  onClearHistory={handleClearLocalHistory}
+                  onDeleteRecord={handleDeleteRecord}
+                />
               </div>
             )
           )}
